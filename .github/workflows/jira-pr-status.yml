@@ -1,4 +1,6 @@
-# Reusable: tells the Jira automation flow whether a PR is draft or ready for review.
+# Reusable: tells the Jira automation flow about PR state.
+# - opened/reopened/ready_for_review/converted_to_draft: sends draft state (keys from branch + title).
+# - closed + merged master -> staging: sends event merged_to_staging (keys from the first line of each commit).
 name: Jira PR status
 
 on:
@@ -13,18 +15,32 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     timeout-minutes: 1 # keep Actions minutes usage minimal
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
-      - name: Send draft state to Jira
+      - name: Send PR state to Jira
         env:
           URL: ${{ secrets.JIRA_PR_WEBHOOK_URL }}
           TOKEN: ${{ secrets.JIRA_PR_WEBHOOK_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          ACTION: ${{ github.event.action }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
           TEXT: ${{ github.event.pull_request.head.ref }} ${{ github.event.pull_request.title }}
           DRAFT: ${{ github.event.pull_request.draft }}
         run: |
+          if [ "$ACTION" = "closed" ]; then
+            # Release PR master -> staging: keys from commit subjects only (merge/squash subjects carry branch or title, never descriptions).
+            TEXT=$(gh api "repos/$REPO/pulls/$PR/commits" --paginate --jq '.[].commit.message | split("\n")[0]')
+            DATA='{"event":"merged_to_staging"}'
+          else
+            DATA="{\"event\":\"pr_state\",\"draft\":$DRAFT}"
+          fi
           keys=$(grep -oiE '[a-z][a-z0-9]+-[0-9]+' <<< "$TEXT" | tr a-z A-Z | sort -u | jq -Rsc 'split("\n") | map(select(. != ""))')
-          if [ "$keys" = "[]" ]; then echo "No Jira key in branch or title, skipping"; exit 0; fi
-          echo "Issues: $keys, draft: $DRAFT"
+          if [ "$keys" = "[]" ]; then echo "No Jira key found, skipping"; exit 0; fi
+          echo "Issues: $keys, data: $DATA"
           curl -sS --fail --max-time 15 -X POST "$URL" \
             -H "Content-Type: application/json" \
             -H "X-Automation-Webhook-Token: $TOKEN" \
-            -d "{\"issues\":$keys,\"data\":{\"draft\":$DRAFT}}"
+            -d "{\"issues\":$keys,\"data\":$DATA}"

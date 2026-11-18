@@ -2,9 +2,11 @@ name: Jira PR status
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, converted_to_draft]
+    types: [opened, reopened, ready_for_review, converted_to_draft, closed]
 
 jobs:
   jira:
+    # closed only matters for a merged master -> staging release PR; skipping other closes costs no Actions minutes
+    if: github.event.action != 'closed' || (github.event.pull_request.merged && github.base_ref == 'staging' && github.head_ref == 'master')
     uses: DTT-Digital-Agency/.github/.github/workflows/jira-pr-status.yml@main
     secrets: inherit
