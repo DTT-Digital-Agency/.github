@@ -1,8 +1,20 @@
-# Reusable: tells the Jira automation flow whether a PR is draft or ready for review.
+# Reusable: sends every GitHub -> Jira status event to one Jira webhook flow.
+# Jira keys only ever come from branch names - never PR titles, descriptions or commit messages.
+#   create (branch)                      -> branch_created     (created branch)
+#   PR opened/reopened/ready/draft       -> pr_state + draft   (PR source branch)
+#   PR merged into a *master* branch     -> merged_to_master   (PR source branch)
+#   PR master -> staging merged          -> merged_to_staging  (source branches of the PRs whose commits are in the release)
 name: Jira PR status
 
 on:
   workflow_call:
+    inputs:
+      main_branch:
+        type: string
+        default: master
+      staging_branch:
+        type: string
+        default: staging
     secrets:
       JIRA_PR_WEBHOOK_URL:
         required: true
@@ -12,19 +24,40 @@ on:
 jobs:
   notify:
     runs-on: ubuntu-latest
-    timeout-minutes: 1 # keep Actions minutes usage minimal
+    timeout-minutes: 2 # keep Actions minutes usage minimal (release PRs need a few API lookups)
     steps:
-      - name: Send draft state to Jira
+      - name: Send status event to Jira
         env:
           URL: ${{ secrets.JIRA_PR_WEBHOOK_URL }}
           TOKEN: ${{ secrets.JIRA_PR_WEBHOOK_TOKEN }}
-          TEXT: ${{ github.event.pull_request.head.ref }} ${{ github.event.pull_request.title }}
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          CREATED_REF: ${{ github.event.ref }}
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
           DRAFT: ${{ github.event.pull_request.draft }}
+          MAIN: ${{ inputs.main_branch }}
+          STAGING: ${{ inputs.staging_branch }}
         run: |
+          if [ "$EVENT" = "create" ]; then
+            TEXT="$CREATED_REF"; DATA='{"event":"branch_created"}'
+          elif [ "$ACTION" = "closed" ] && [ "$HEAD" = "$MAIN" ] && [ "$BASE" = "$STAGING" ]; then
+            # source branch of every PR that brought a commit into this release
+            TEXT=$(gh api "repos/$REPO/pulls/$PR/commits" --paginate --jq '.[].sha' \
+              | xargs -P 8 -I{} gh api "repos/$REPO/commits/{}/pulls" --jq ".[] | select(.number != $PR) | .head.ref")
+            DATA='{"event":"merged_to_staging"}'
+          elif [ "$ACTION" = "closed" ]; then
+            TEXT="$HEAD"; DATA='{"event":"merged_to_master"}'
+          else
+            TEXT="$HEAD"; DATA="{\"event\":\"pr_state\",\"draft\":$DRAFT}"
+          fi
           keys=$(grep -oiE '[a-z][a-z0-9]+-[0-9]+' <<< "$TEXT" | tr a-z A-Z | sort -u | jq -Rsc 'split("\n") | map(select(. != ""))')
-          if [ "$keys" = "[]" ]; then echo "No Jira key in branch or title, skipping"; exit 0; fi
-          echo "Issues: $keys, draft: $DRAFT"
+          if [ "$keys" = "[]" ]; then echo "No Jira key found, skipping"; exit 0; fi
+          echo "Issues: $keys, data: $DATA"
           curl -sS --fail --max-time 15 -X POST "$URL" \
             -H "Content-Type: application/json" \
             -H "X-Automation-Webhook-Token: $TOKEN" \
-            -d "{\"issues\":$keys,\"data\":{\"draft\":$DRAFT}}"
+            -d "{\"issues\":$keys,\"data\":$DATA}"

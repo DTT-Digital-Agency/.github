@@ -1,10 +1,20 @@
 name: Jira PR status
 
 on:
+  create:
   pull_request:
-    types: [opened, reopened, ready_for_review, converted_to_draft]
+    types: [opened, reopened, ready_for_review, converted_to_draft, closed]
 
 jobs:
   jira:
+    # Skip events Jira doesn't need (tags, unmerged closes, other merges) so they cost no Actions minutes.
+    if: >-
+      (github.event_name == 'create' && github.event.ref_type == 'branch') ||
+      (github.event_name == 'pull_request' && (github.event.action != 'closed' ||
+        (github.event.pull_request.merged && (contains(github.base_ref, 'master') ||
+          (github.base_ref == 'staging' && github.head_ref == 'master')))))
+    permissions:
+      contents: read
+      pull-requests: read
     uses: DTT-Digital-Agency/.github/.github/workflows/jira-pr-status.yml@main
     secrets: inherit
