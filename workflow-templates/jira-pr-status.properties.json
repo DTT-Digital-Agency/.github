@@ -1,4 +1,4 @@
 {
   "name": "Jira PR status",
-  "description": "Moves the Jira issue to Pending Review when a PR is ready for review, and back to In Progress when it is turned into a draft."
+  "description": "Moves Jira issues through In Progress, Pending Review, Merged Into Master and Ready For Testing based on branch and PR events."
 }
