@@ -1,9 +1,9 @@
 # Reusable: sends every GitHub -> Jira status event to one Jira webhook flow.
-# Jira keys only ever come from branch names, PR titles or commit subjects - never PR descriptions.
-#   create (branch)                      -> branch_created     (key from branch name)
-#   PR opened/reopened/ready/draft       -> pr_state + draft   (keys from branch + title)
-#   PR merged into a *master* branch     -> merged_to_master   (keys from branch + title)
-#   PR master -> staging merged          -> merged_to_staging  (keys from first line of each commit)
+# Jira keys only ever come from branch names - never PR titles, descriptions or commit messages.
+#   create (branch)                      -> branch_created     (created branch)
+#   PR opened/reopened/ready/draft       -> pr_state + draft   (PR source branch)
+#   PR merged into a *master* branch     -> merged_to_master   (PR source branch)
+#   PR master -> staging merged          -> merged_to_staging  (source branches of the PRs whose commits are in the release)
 name: Jira PR status
 
 on:
@@ -24,7 +24,7 @@ on:
 jobs:
   notify:
     runs-on: ubuntu-latest
-    timeout-minutes: 1 # keep Actions minutes usage minimal
+    timeout-minutes: 2 # keep Actions minutes usage minimal (release PRs need a few API lookups)
     steps:
       - name: Send status event to Jira
         env:
@@ -38,7 +38,6 @@ jobs:
           CREATED_REF: ${{ github.event.ref }}
           BASE: ${{ github.base_ref }}
           HEAD: ${{ github.head_ref }}
-          TITLE: ${{ github.event.pull_request.title }}
           DRAFT: ${{ github.event.pull_request.draft }}
           MAIN: ${{ inputs.main_branch }}
           STAGING: ${{ inputs.staging_branch }}
@@ -46,12 +45,14 @@ jobs:
           if [ "$EVENT" = "create" ]; then
             TEXT="$CREATED_REF"; DATA='{"event":"branch_created"}'
           elif [ "$ACTION" = "closed" ] && [ "$HEAD" = "$MAIN" ] && [ "$BASE" = "$STAGING" ]; then
-            TEXT=$(gh api "repos/$REPO/pulls/$PR/commits" --paginate --jq '.[].commit.message | split("\n")[0]')
+            # source branch of every PR that brought a commit into this release
+            TEXT=$(gh api "repos/$REPO/pulls/$PR/commits" --paginate --jq '.[].sha' \
+              | xargs -P 8 -I{} gh api "repos/$REPO/commits/{}/pulls" --jq ".[] | select(.number != $PR) | .head.ref")
             DATA='{"event":"merged_to_staging"}'
           elif [ "$ACTION" = "closed" ]; then
-            TEXT="$HEAD $TITLE"; DATA='{"event":"merged_to_master"}'
+            TEXT="$HEAD"; DATA='{"event":"merged_to_master"}'
           else
-            TEXT="$HEAD $TITLE"; DATA="{\"event\":\"pr_state\",\"draft\":$DRAFT}"
+            TEXT="$HEAD"; DATA="{\"event\":\"pr_state\",\"draft\":$DRAFT}"
           fi
           keys=$(grep -oiE '[a-z][a-z0-9]+-[0-9]+' <<< "$TEXT" | tr a-z A-Z | sort -u | jq -Rsc 'split("\n") | map(select(. != ""))')
           if [ "$keys" = "[]" ]; then echo "No Jira key found, skipping"; exit 0; fi
