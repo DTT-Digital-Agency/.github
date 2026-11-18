@@ -1,0 +1,10 @@
+name: Jira PR status
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, converted_to_draft]
+
+jobs:
+  jira:
+    uses: DTT-Digital-Agency/.github/.github/workflows/jira-pr-status.yml@main
+    secrets: inherit
