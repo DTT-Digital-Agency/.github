@@ -8,6 +8,13 @@ name: Jira PR status
 
 on:
   workflow_call:
+    inputs:
+      main_branch:
+        type: string
+        default: master
+      staging_branch:
+        type: string
+        default: staging
     secrets:
       JIRA_PR_WEBHOOK_URL:
         required: true
@@ -33,10 +40,12 @@ jobs:
           HEAD: ${{ github.head_ref }}
           TITLE: ${{ github.event.pull_request.title }}
           DRAFT: ${{ github.event.pull_request.draft }}
+          MAIN: ${{ inputs.main_branch }}
+          STAGING: ${{ inputs.staging_branch }}
         run: |
           if [ "$EVENT" = "create" ]; then
             TEXT="$CREATED_REF"; DATA='{"event":"branch_created"}'
-          elif [ "$ACTION" = "closed" ] && [ "$HEAD" = "master" ] && [ "$BASE" = "staging" ]; then
+          elif [ "$ACTION" = "closed" ] && [ "$HEAD" = "$MAIN" ] && [ "$BASE" = "$STAGING" ]; then
             TEXT=$(gh api "repos/$REPO/pulls/$PR/commits" --paginate --jq '.[].commit.message | split("\n")[0]')
             DATA='{"event":"merged_to_staging"}'
           elif [ "$ACTION" = "closed" ]; then
