@@ -1,4 +1,0 @@
-{
-  "name": "Jira PR status",
-  "description": "Moves Jira issues through In Progress, Pending Review, Merged Into Master and Ready For Testing based on branch and PR events."
-}
